@@ -1,5 +1,5 @@
 const express = require("express");
-const puppeteer = require("puppeteer");
+const puppeteer = require("puppeteer-core");
 const nodemailer = require("nodemailer");
 
 // ENV
@@ -8,7 +8,9 @@ const GMAIL_USER = process.env.GMAIL_USER;
 const GMAIL_PASS = process.env.GMAIL_APP_PASS;
 const EMAIL_TO_1 = process.env.EMAIL_TO_1;
 const EMAIL_TO_2 = process.env.EMAIL_TO_2;
-const CHECK_INTERVAL = process.env.CHECK_INTERVAL ? Number(process.env.CHECK_INTERVAL) : 600000;
+const CHECK_INTERVAL = process.env.CHECK_INTERVAL
+  ? Number(process.env.CHECK_INTERVAL)
+  : 600000;
 
 // thresholds
 const thresholds = [3000, 2500, 2000, 1500, 1000];
@@ -19,7 +21,7 @@ function log(...msg) {
   console.log(`[${new Date().toISOString()}]`, ...msg);
 }
 
-// Nodemailer
+// Email transporter
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -42,25 +44,21 @@ Great news — the room price at goSTOPS Srinagar just dropped!
 🔹 Checked At: ${new Date().toLocaleString()}
 
 This email was sent because:
-✔ The price is below your active threshold
+✔ The price is below your current threshold
 ✔ The price is lower than any previously notified price
 
-🔗 Book now:
+🔗 Book here:
 ${URL}
 
-📌 What happens next?
-Your watcher continues running.
-Next threshold to monitor: ₹${thresholds[currentIndex + 1] ?? "Final threshold reached"}
+Next threshold to watch: ₹${thresholds[currentIndex + 1] ?? "Final reached"}
 
-You'll receive another alert if price drops again.
-
-Happy deal hunting!  
-Your GoStops Price Watcher 🤖`
+Your GoSTOPS Watcher 🤖`
   });
 
-  log(`Email sent for threshold ₹${threshold} → ${EMAIL_TO_1}, ${EMAIL_TO_2}`);
+  log(`Email sent for threshold ₹${threshold} to ${EMAIL_TO_1}, ${EMAIL_TO_2}`);
 }
 
+// Scroll for lazy-loaded content
 async function autoScroll(page) {
   await page.evaluate(async () => {
     await new Promise(resolve => {
@@ -78,15 +76,17 @@ async function autoScroll(page) {
   });
 }
 
+// Get price once
 async function checkPriceOnce() {
   const browser = await puppeteer.launch({
     headless: true,
-    executablePath: puppeteer.executablePath(),  // IMPORTANT FIX!
+    executablePath: "/usr/bin/chromium",
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
+      "--single-process",
       "--disable-software-rasterizer"
     ]
   });
@@ -111,6 +111,7 @@ async function checkPriceOnce() {
 
     const price = parseFloat(match[1].replace(/,/g, ""));
     log("Parsed price:", price);
+
     return price;
 
   } catch (err) {
@@ -122,14 +123,18 @@ async function checkPriceOnce() {
   }
 }
 
+// Watcher loop
 async function runWatcherLoop() {
-  log("Watcher loop starting → thresholds:", thresholds.join(" → "));
+  log("Watcher started — thresholds:", thresholds.join(" → "));
 
   while (currentIndex < thresholds.length) {
     const threshold = thresholds[currentIndex];
-    log(`Checking… Target ₹${threshold}, Last Notified: ${
-      lastNotifiedPrice === Infinity ? "none" : "₹" + lastNotifiedPrice
-    }`);
+
+    log(
+      `Checking price… threshold ₹${threshold}, last notified: ${
+        lastNotifiedPrice === Infinity ? "none" : "₹" + lastNotifiedPrice
+      }`
+    );
 
     try {
       const price = await checkPriceOnce();
@@ -141,37 +146,34 @@ async function runWatcherLoop() {
           currentIndex++;
 
           if (currentIndex >= thresholds.length) {
-            log("Final threshold reached — stopping.");
+            log("All thresholds completed — watcher done.");
             break;
-          } else {
-            log(`Next threshold → ₹${thresholds[currentIndex]}`);
           }
 
+          log(`Next threshold: ₹${thresholds[currentIndex]}`);
+
         } else if (price <= threshold && price >= lastNotifiedPrice) {
-          log(`Price ₹${price} <= threshold but NOT lower than last notified (₹${lastNotifiedPrice})`);
+          log(`Price ₹${price} hit threshold but wasn't lower than previous notified price.`);
         } else {
-          log(`Price ₹${price} is above current threshold.`);
+          log(`Price ₹${price} is above threshold.`);
         }
       }
-
-    } catch (e) {
-      log("Error inside loop:", e.message);
+    } catch (err) {
+      log("Loop error:", err.message);
     }
 
     log(`Sleeping ${CHECK_INTERVAL / 60000} minutes...\n`);
     await new Promise(res => setTimeout(res, CHECK_INTERVAL));
   }
-
-  log("Watcher finished all thresholds.");
 }
 
-// Express — required for Render free plan
+// Express server for Render free plan
 const app = express();
 app.get("/", (req, res) => res.send("OK"));
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-  log(`Keep-alive server running on ${port}`);
+  log(`Keep-alive server running on port ${port}`);
   runWatcherLoop().catch(err => {
     log("Watcher crashed:", err.message);
     process.exit(1);

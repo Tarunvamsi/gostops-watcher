@@ -3,7 +3,12 @@ services:
     name: gostops-price-watcher
     env: node
     plan: free
-    buildCommand: "npm install"
+
+    buildCommand: |
+      apt-get update
+      apt-get install -y chromium
+      npm install
+
     startCommand: "npm start"
 
     envVars:
@@ -24,6 +29,3 @@ services:
 
       - key: CHECK_INTERVAL
         value: "600000"
-
-      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
-        value: "false"
