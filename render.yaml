@@ -9,13 +9,21 @@ services:
     envVars:
       - key: URL
         value: "https://gostops.com/stay/Srinagar/srinagar-hostel?checkin=2026-01-16&checkout=2026-01-17"
+
       - key: GMAIL_USER
         value: "tarunvamsipusarla@gmail.com"
+
       - key: GMAIL_APP_PASS
         value: "uskguyltgjebtqeg"
+
       - key: EMAIL_TO_1
         value: "pusarlatarunvamsi@gmail.com"
+
       - key: EMAIL_TO_2
         value: "psai7094@gmail.com"
+
       - key: CHECK_INTERVAL
-        value: "600000" # 10 minutes in ms
+        value: "600000"
+
+      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
+        value: "false"
