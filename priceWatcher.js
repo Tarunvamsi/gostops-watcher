@@ -1,6 +1,6 @@
 const express = require("express");
 const puppeteer = require("puppeteer-core");
-const chromium = require("chrome-aws-lambda");
+const chromium = require("@sparticuz/chromium");
 const nodemailer = require("nodemailer");
 
 // ENV
@@ -13,7 +13,7 @@ const CHECK_INTERVAL = process.env.CHECK_INTERVAL
   ? Number(process.env.CHECK_INTERVAL)
   : 600000;
 
-// thresholds sequence
+// thresholds
 const thresholds = [3000, 2500, 2000, 1500, 1000];
 let currentIndex = 0;
 let lastNotifiedPrice = Infinity;
@@ -44,67 +44,60 @@ Great news — the room price at goSTOPS Srinagar just dropped!
 🔹 Trigger Threshold: ₹${threshold}
 🔹 Checked At: ${new Date().toLocaleString()}
 
-This email was sent because:
-✔ The price is below your current threshold
-✔ The price is lower than any previously notified price
-
-🔗 Book here:
+Book now:
 ${URL}
 
-Next threshold to watch: ₹${thresholds[currentIndex + 1] ?? "Final reached"}
-
-Your GoSTOPS Watcher 🤖`
+Next threshold: ₹${thresholds[currentIndex + 1] ?? "No more"}`
   });
 
-  log(`Email sent for threshold ₹${threshold} to ${EMAIL_TO_1}, ${EMAIL_TO_2}`);
+  log(`Email sent for threshold ₹${threshold}`);
 }
 
-// Page scroll helper
+// Scroll helper
 async function autoScroll(page) {
   await page.evaluate(async () => {
     await new Promise(resolve => {
       let totalHeight = 0;
-      const distance = 300;
+      const dist = 300;
       const timer = setInterval(() => {
-        window.scrollBy(0, distance);
-        totalHeight += distance;
+        window.scrollBy(0, dist);
+        totalHeight += dist;
         if (totalHeight >= document.body.scrollHeight) {
           clearInterval(timer);
           resolve();
         }
-      }, 150);
+      }, 120);
     });
   });
 }
 
-// Main price extraction
+// Check price
 async function checkPriceOnce() {
   let browser;
 
   try {
-    const executablePath = await chromium.executablePath;
+    const execPath = await chromium.executablePath();
+
+    log("Launching Chromium from:", execPath);
 
     browser = await puppeteer.launch({
+      executablePath: execPath,
       args: chromium.args,
       defaultViewport: chromium.defaultViewport,
-      executablePath,
       headless: chromium.headless
     });
 
     const page = await browser.newPage();
     await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 60000 });
-
-    await new Promise(res => setTimeout(res, 3000));
+    await new Promise(res => setTimeout(res, 2000));
     await autoScroll(page);
 
     const text = await page.evaluate(() => document.body.innerText);
-    log("Extracted text from page.");
-
     let match = text.match(/Starting from\s*₹\s*([0-9.,]+)/i);
     if (!match) match = text.match(/₹\s*([0-9.,]+)/);
 
     if (!match) {
-      log("No valid price found.");
+      log("Price not found.");
       return null;
     }
 
@@ -113,7 +106,7 @@ async function checkPriceOnce() {
     return price;
 
   } catch (err) {
-    log("Error in checkPriceOnce:", err.message);
+    log("Scraping error:", err.message);
     return null;
 
   } finally {
@@ -121,62 +114,38 @@ async function checkPriceOnce() {
   }
 }
 
-// Repeated watcher loop
+// Watch loop
 async function runWatcherLoop() {
-  log("Watcher started — thresholds:", thresholds.join(" → "));
+  log("Watcher started → thresholds:", thresholds.join(" → "));
 
   while (currentIndex < thresholds.length) {
     const threshold = thresholds[currentIndex];
 
-    log(
-      `Checking price… threshold ₹${threshold}, last notified: ${
-        lastNotifiedPrice === Infinity ? "none" : "₹" + lastNotifiedPrice
-      }`
-    );
+    log(`Checking… current threshold ₹${threshold}, last notified: ${
+      lastNotifiedPrice === Infinity ? "none" : lastNotifiedPrice
+    }`);
 
-    try {
-      const price = await checkPriceOnce();
+    const price = await checkPriceOnce();
 
-      if (price !== null && !isNaN(price)) {
-        if (price <= threshold && price < lastNotifiedPrice) {
-          await sendAlertEmail(price, threshold);
-          lastNotifiedPrice = price;
-          currentIndex++;
-
-          if (currentIndex >= thresholds.length) {
-            log("All thresholds completed — watcher done.");
-            break;
-          }
-
-          log(`Next threshold: ₹${thresholds[currentIndex]}`);
-
-        } else if (price <= threshold && price >= lastNotifiedPrice) {
-          log(`Price ₹${price} hit threshold but wasn't lower than last notified.`);
-        } else {
-          log(`Price ₹${price} is above threshold.`);
-        }
-      }
-
-    } catch (err) {
-      log("Loop error:", err.message);
+    if (price !== null && price <= threshold && price < lastNotifiedPrice) {
+      await sendAlertEmail(price, threshold);
+      lastNotifiedPrice = price;
+      currentIndex++;
     }
 
     log(`Sleeping ${CHECK_INTERVAL / 60000} minutes...\n`);
-    await new Promise(res => setTimeout(res, CHECK_INTERVAL));
+    await new Promise(r => setTimeout(r, CHECK_INTERVAL));
   }
 
-  log("Watcher finished all thresholds.");
+  log("All thresholds completed.");
 }
 
-// Express keep-alive for Render
+// Express keep-alive
 const app = express();
 app.get("/", (req, res) => res.send("OK"));
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-  log(`Keep-alive server running on port ${port}`);
-  runWatcherLoop().catch(err => {
-    log("Watcher crashed:", err.message);
-    process.exit(1);
-  });
+  log(`Server running on ${port}`);
+  runWatcherLoop();
 });
