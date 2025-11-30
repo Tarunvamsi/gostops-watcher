@@ -1,7 +1,7 @@
 const express = require("express");
 const puppeteer = require("puppeteer-core");
+const chromium = require("chrome-aws-lambda");
 const nodemailer = require("nodemailer");
-const fs = require("fs");
 
 // ENV
 const URL = process.env.URL;
@@ -13,7 +13,7 @@ const CHECK_INTERVAL = process.env.CHECK_INTERVAL
   ? Number(process.env.CHECK_INTERVAL)
   : 600000;
 
-// thresholds
+// thresholds sequence
 const thresholds = [3000, 2500, 2000, 1500, 1000];
 let currentIndex = 0;
 let lastNotifiedPrice = Infinity;
@@ -30,26 +30,6 @@ const transporter = nodemailer.createTransport({
     pass: GMAIL_PASS
   }
 });
-
-// Possible chromium paths in Render
-const chromiumPaths = [
-  "/usr/bin/chromium",
-  "/usr/bin/chromium-browser",
-  "/usr/bin/google-chrome",
-  "/usr/bin/chrome"
-];
-
-// Auto-detect chromium
-function findChromium() {
-  for (const p of chromiumPaths) {
-    if (fs.existsSync(p)) {
-      log("Found Chromium at:", p);
-      return p;
-    }
-  }
-  log("ERROR: No Chromium executable found.");
-  return null;
-}
 
 async function sendAlertEmail(price, threshold) {
   await transporter.sendMail({
@@ -79,7 +59,7 @@ Your GoSTOPS Watcher 🤖`
   log(`Email sent for threshold ₹${threshold} to ${EMAIL_TO_1}, ${EMAIL_TO_2}`);
 }
 
-// Scroll for lazy-loaded content
+// Page scroll helper
 async function autoScroll(page) {
   await page.evaluate(async () => {
     await new Promise(resolve => {
@@ -97,39 +77,28 @@ async function autoScroll(page) {
   });
 }
 
-// Get price once
+// Main price extraction
 async function checkPriceOnce() {
-  const execPath = findChromium();
-  if (!execPath) return null;
-
   let browser;
 
   try {
+    const executablePath = await chromium.executablePath;
+
     browser = await puppeteer.launch({
-      headless: true,
-      executablePath: execPath,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--single-process",
-        "--disable-software-rasterizer",
-        "--disable-extensions"
-      ]
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath,
+      headless: chromium.headless
     });
 
     const page = await browser.newPage();
-    await page.goto(URL, {
-      waitUntil: "domcontentloaded",
-      timeout: 60000
-    });
+    await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 60000 });
 
     await new Promise(res => setTimeout(res, 3000));
     await autoScroll(page);
 
     const text = await page.evaluate(() => document.body.innerText);
-    log("Extracted text.");
+    log("Extracted text from page.");
 
     let match = text.match(/Starting from\s*₹\s*([0-9.,]+)/i);
     if (!match) match = text.match(/₹\s*([0-9.,]+)/);
@@ -141,7 +110,6 @@ async function checkPriceOnce() {
 
     const price = parseFloat(match[1].replace(/,/g, ""));
     log("Parsed price:", price);
-
     return price;
 
   } catch (err) {
@@ -153,7 +121,7 @@ async function checkPriceOnce() {
   }
 }
 
-// Watcher loop
+// Repeated watcher loop
 async function runWatcherLoop() {
   log("Watcher started — thresholds:", thresholds.join(" → "));
 
@@ -183,11 +151,12 @@ async function runWatcherLoop() {
           log(`Next threshold: ₹${thresholds[currentIndex]}`);
 
         } else if (price <= threshold && price >= lastNotifiedPrice) {
-          log(`Price ₹${price} hit threshold but wasn't lower than previous notified price.`);
+          log(`Price ₹${price} hit threshold but wasn't lower than last notified.`);
         } else {
           log(`Price ₹${price} is above threshold.`);
         }
       }
+
     } catch (err) {
       log("Loop error:", err.message);
     }
@@ -195,9 +164,11 @@ async function runWatcherLoop() {
     log(`Sleeping ${CHECK_INTERVAL / 60000} minutes...\n`);
     await new Promise(res => setTimeout(res, CHECK_INTERVAL));
   }
+
+  log("Watcher finished all thresholds.");
 }
 
-// Express keep-alive
+// Express keep-alive for Render
 const app = express();
 app.get("/", (req, res) => res.send("OK"));
 
