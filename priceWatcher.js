@@ -13,7 +13,7 @@ const CHECK_INTERVAL = process.env.CHECK_INTERVAL
   ? Number(process.env.CHECK_INTERVAL)
   : 600000;
 
-// thresholds
+// thresholds chain
 const thresholds = [3000, 2500, 2000, 1500, 1000];
 let currentIndex = 0;
 let lastNotifiedPrice = Infinity;
@@ -38,7 +38,7 @@ async function sendAlertEmail(price, threshold) {
     subject: `GoStops Price Alert! Price ₹${price} (Threshold ₹${threshold})`,
     text: `📢 GoSTOPS Price Drop Alert!
 
-Great news — the room price at goSTOPS Srinagar just dropped!
+Good news — the room price at goSTOPS Srinagar just dropped!
 
 🔹 Current Price: ₹${price}
 🔹 Trigger Threshold: ₹${threshold}
@@ -47,7 +47,9 @@ Great news — the room price at goSTOPS Srinagar just dropped!
 Book now:
 ${URL}
 
-Next threshold: ₹${thresholds[currentIndex + 1] ?? "No more"}`
+Next threshold to watch: ₹${thresholds[currentIndex + 1] ?? "No more"}
+
+Your GoSTOPS Watcher 🤖`
   });
 
   log(`Email sent for threshold ₹${threshold}`);
@@ -71,7 +73,7 @@ async function autoScroll(page) {
   });
 }
 
-// Check price
+// MAIN PRICE SCRAPER
 async function checkPriceOnce() {
   let browser;
 
@@ -89,21 +91,34 @@ async function checkPriceOnce() {
 
     const page = await browser.newPage();
     await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+
     await new Promise(res => setTimeout(res, 2000));
     await autoScroll(page);
 
     const text = await page.evaluate(() => document.body.innerText);
-    let match = text.match(/Starting from\s*₹\s*([0-9.,]+)/i);
-    if (!match) match = text.match(/₹\s*([0-9.,]+)/);
 
-    if (!match) {
-      log("Price not found.");
-      return null;
+    // 1) Try exact "Starting from" pattern
+    let match = text.match(/Starting from[^₹]*₹\s*([0-9.,]+)/i);
+
+    if (match) {
+      const p = parseFloat(match[1].replace(/,/g, ""));
+      log("Parsed price (starting from):", p);
+      return p;
     }
 
-    const price = parseFloat(match[1].replace(/,/g, ""));
-    log("Parsed price:", price);
-    return price;
+    // 2) Fallback: capture ALL ₹ amounts and pick the lowest
+    const allMatches = [...text.matchAll(/₹\s*([0-9.,]+)/g)]
+      .map(m => parseFloat(m[1].replace(/,/g, "")))
+      .filter(n => !isNaN(n) && n > 100 && n < 20000); // remove garbage numbers
+
+    if (allMatches.length > 0) {
+      const lowest = Math.min(...allMatches);
+      log("Parsed price (fallback lowest):", lowest);
+      return lowest;
+    }
+
+    log("Price not found.");
+    return null;
 
   } catch (err) {
     log("Scraping error:", err.message);
@@ -140,7 +155,7 @@ async function runWatcherLoop() {
   log("All thresholds completed.");
 }
 
-// Express keep-alive
+// Express keep-alive (Render required)
 const app = express();
 app.get("/", (req, res) => res.send("OK"));
 

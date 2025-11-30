@@ -21,7 +21,7 @@ services:
         value: "pusarlatarunvamsi@gmail.com"
 
       - key: EMAIL_TO_2
-        value: "psai7094@gmail.com"
+        value: "tarunvamsi.work@gmail.com"
 
       - key: CHECK_INTERVAL
         value: "600000"
