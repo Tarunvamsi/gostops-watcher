@@ -1,0 +1,13 @@
+services:
+  - type: worker
+    name: gostops-price-watcher
+    env: node
+    plan: free
+    buildCommand: "npm install"
+    startCommand: "npm start"
+    envVars:
+      URL: https://gostops.com/stay/Srinagar/srinagar-hostel?checkin=2026-01-16&checkout=2026-01-17
+      GMAIL_USER: tarunvamsipusarla@gmail.com
+      GMAIL_APP_PASS: uskguyltgjebtqeg
+      EMAIL_TO_1: pusarlatarunvamsi@gmail.com
+      EMAIL_TO_2: psai7094@gmail.com
