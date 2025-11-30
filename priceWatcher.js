@@ -1,5 +1,6 @@
-const puppeteer = require("puppeteer");
 const nodemailer = require("nodemailer");
+const chromium = require("@sparticuz/chromium");
+const puppeteer = require("puppeteer-core");
 
 const URL = "https://gostops.com/stay/Srinagar/srinagar-hostel?checkin=2026-01-16&checkout=2026-01-17";
 
@@ -100,47 +101,54 @@ Happy deal hunting,
 }
 
 
-
 async function checkPrice() {
   log("Launching browser...");
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage"
-    ]
-  });
+  let browser;
+  try {
+    const execPath = await chromium.executablePath;
 
-  log("Browser launched. Opening page...");
+    browser = await puppeteer.launch({
+      executablePath: execPath,
+      headless: chromium.headless,
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport
+    });
 
-  const page = await browser.newPage();
-  await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+    log("Browser launched. Opening page...");
+    const page = await browser.newPage();
+    await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-  log("Page loaded. Waiting for content...");
-  await new Promise(res => setTimeout(res, 3000));
+    log("Page loaded. Waiting for content...");
+    await new Promise(res => setTimeout(res, 3000));
 
-  await autoScroll(page);
-  log("Page fully scrolled. Extracting price...");
+    await autoScroll(page);
+    log("Page fully scrolled. Extracting price...");
 
-  const text = await page.evaluate(() => document.body.innerText);
+    const text = await page.evaluate(() => document.body.innerText);
 
-  let match = text.match(/Starting from\s*₹\s*([0-9.,]+)/i);
-  if (!match) match = text.match(/₹\s*([0-9.,]+)/);
+    let match = text.match(/Starting from\s*₹\s*([0-9.,]+)/i);
+    if (!match) match = text.match(/₹\s*([0-9.,]+)/);
 
-  if (!match) {
-    log("⚠️ Unable to extract price. The site structure may have changed.");
-    await browser.close();
+    if (!match) {
+      log("⚠️ Unable to extract price. The site structure may have changed.");
+      return null;
+    }
+
+    const price = parseFloat(match[1].replace(/,/g, ""));
+    log(`📌 Price found: ₹${price}`);
+
+    return price;
+
+  } catch (err) {
+    log("Scraping error:", err.message);
     return null;
+
+  } finally {
+    if (browser) await browser.close().catch(() => {});
   }
-
-  const price = parseFloat(match[1].replace(/,/g, ""));
-  log(`📌 Price found: ₹${price}`);
-
-  await browser.close();
-  return price;
 }
+
 
 
 async function autoScroll(page) {
