@@ -1,30 +1,26 @@
+// priceWatcher.js
+const express = require("express");
 const puppeteer = require("puppeteer");
 const nodemailer = require("nodemailer");
 
-// ENV VARIABLES (from Render)
+// ENV
 const URL = process.env.URL;
-
 const GMAIL_USER = process.env.GMAIL_USER;
 const GMAIL_PASS = process.env.GMAIL_APP_PASS;
-
 const EMAIL_TO_1 = process.env.EMAIL_TO_1;
 const EMAIL_TO_2 = process.env.EMAIL_TO_2;
+const CHECK_INTERVAL = process.env.CHECK_INTERVAL ? Number(process.env.CHECK_INTERVAL) : 10 * 60 * 1000;
 
-// Stepped thresholds
+// thresholds
 const thresholds = [3000, 2500, 2000, 1500, 1000];
 let currentIndex = 0;
+let lastNotifiedPrice = Infinity;
 
-// Interval from ENV or fallback to 10 min
-const CHECK_INTERVAL = process.env.CHECK_INTERVAL
-  ? Number(process.env.CHECK_INTERVAL)
-  : 10 * 60 * 1000;
-
-// Logger
 function log(...msg) {
   console.log(`[${new Date().toISOString()}]`, ...msg);
 }
 
-// Nodemailer transporter (using env vars)
+// Nodemailer
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -55,9 +51,7 @@ ${URL}
 
 📌 What happens next?
 Your watcher continues running.
-Next threshold to monitor: ₹${
-      thresholds[currentIndex + 1] ?? "No more thresholds — final reached"
-    }
+Next threshold to monitor: ₹${thresholds[currentIndex + 1] ?? "No more thresholds — final reached"}
 
 You'll receive another alert only if the price drops further.
 
@@ -66,42 +60,6 @@ Your GoStops Price Watcher 🤖`
   });
 
   log(`Email sent for threshold ₹${threshold} → recipients: ${EMAIL_TO_1}, ${EMAIL_TO_2}`);
-}
-
-async function checkPrice() {
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage"
-    ]
-  });
-
-  const page = await browser.newPage();
-  await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 60000 });
-
-  await new Promise(res => setTimeout(res, 3000));
-
-  await autoScroll(page);
-
-  const text = await page.evaluate(() => document.body.innerText);
-  log("Extracted text from page.");
-
-  let match = text.match(/Starting from\s*₹\s*([0-9.,]+)/i);
-  if (!match) match = text.match(/₹\s*([0-9.,]+)/);
-
-  if (!match) {
-    log("No valid price found.");
-    await browser.close();
-    return null;
-  }
-
-  const price = parseFloat(match[1].replace(/,/g, ""));
-  log("Parsed price:", price);
-
-  await browser.close();
-  return price;
 }
 
 async function autoScroll(page) {
@@ -121,53 +79,84 @@ async function autoScroll(page) {
   });
 }
 
-let lastNotifiedPrice = Infinity;
+async function checkPriceOnce() {
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+  });
 
-(async function runWatcher() {
-  log("Watcher started...");
-  log("Threshold sequence:", thresholds.join(" → "));
+  try {
+    const page = await browser.newPage();
+    await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await new Promise(res => setTimeout(res, 3000));
+    await autoScroll(page);
+    const text = await page.evaluate(() => document.body.innerText);
+    log("Extracted text from page.");
 
+    let match = text.match(/Starting from\s*₹\s*([0-9.,]+)/i);
+    if (!match) match = text.match(/₹\s*([0-9.,]+)/);
+
+    if (!match) {
+      log("No valid price found.");
+      return null;
+    }
+
+    const price = parseFloat(match[1].replace(/,/g, ""));
+    log("Parsed price:", price);
+    return price;
+  } catch (err) {
+    log("Error in checkPriceOnce:", err.message || err);
+    return null;
+  } finally {
+    try { await browser.close(); } catch(e) {}
+  }
+}
+
+// watcher loop (runs until final threshold reached)
+async function runWatcherLoop() {
+  log("Watcher loop starting. Thresholds:", thresholds.join(" → "));
   while (currentIndex < thresholds.length) {
     const currentThreshold = thresholds[currentIndex];
-
     try {
-      log(
-        `Checking… threshold: ₹${currentThreshold}, last notified: ${
-          lastNotifiedPrice === Infinity ? "none" : "₹" + lastNotifiedPrice
-        }`
-      );
-
-      const price = await checkPrice();
+      log(`Checking… target ₹${currentThreshold}, lastNotified: ${lastNotifiedPrice === Infinity ? "none" : "₹"+lastNotifiedPrice}`);
+      const price = await checkPriceOnce();
 
       if (price !== null && !isNaN(price)) {
         if (price <= currentThreshold && price < lastNotifiedPrice) {
           await sendAlertEmail(price, currentThreshold);
-
           lastNotifiedPrice = price;
           currentIndex++;
-
           if (currentIndex >= thresholds.length) {
-            log("Final threshold reached. Exiting watcher.");
-            process.exit(0);
+            log("Final threshold reached. Stopping watcher loop.");
+            break;
           } else {
-            log(`Next threshold → ₹${thresholds[currentIndex]}`);
+            log(`Next threshold -> ₹${thresholds[currentIndex]}`);
           }
-
         } else if (price <= currentThreshold && price >= lastNotifiedPrice) {
-          log(`Price ₹${price} <= threshold BUT not lower than last notified. No email.`);
+          log(`Price ₹${price} <= threshold but not lower than previous notified ₹${lastNotifiedPrice}. No email.`);
         } else {
           log(`Price ₹${price} is above threshold ₹${currentThreshold}.`);
         }
       }
-
     } catch (err) {
-      log("Error during check:", err.message);
+      log("Unhandled error in loop:", err.message || err);
     }
 
-    log(`Sleeping ${CHECK_INTERVAL / 60000} minutes before next check.\n`);
+    log(`Sleeping ${Math.round(CHECK_INTERVAL/60000)} minute(s) before next check.`);
     await new Promise(res => setTimeout(res, CHECK_INTERVAL));
   }
+  log("Watcher loop finished.");
+}
 
-  log("Watcher completed all thresholds. Stopped.");
-  process.exit(0);
-})();
+// Express keep-alive server for Render (and health checks)
+const app = express();
+app.get("/", (req, res) => res.send("OK"));
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  log(`Express keep-alive listening on port ${port}`);
+  // start the watcher in background
+  runWatcherLoop().catch(err => {
+    log("Watcher crashed:", err.message || err);
+    process.exit(1);
+  });
+});
