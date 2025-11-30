@@ -112,6 +112,7 @@ async function checkPrice() {
       executablePath: execPath,
       headless: chromium.headless,
       args: chromium.args,
+      ignoreDefaultArgs: ["--disable-extensions"],
       defaultViewport: chromium.defaultViewport
     });
 
