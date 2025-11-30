@@ -1,6 +1,7 @@
 const express = require("express");
 const puppeteer = require("puppeteer-core");
 const nodemailer = require("nodemailer");
+const fs = require("fs");
 
 // ENV
 const URL = process.env.URL;
@@ -29,6 +30,26 @@ const transporter = nodemailer.createTransport({
     pass: GMAIL_PASS
   }
 });
+
+// Possible chromium paths in Render
+const chromiumPaths = [
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/google-chrome",
+  "/usr/bin/chrome"
+];
+
+// Auto-detect chromium
+function findChromium() {
+  for (const p of chromiumPaths) {
+    if (fs.existsSync(p)) {
+      log("Found Chromium at:", p);
+      return p;
+    }
+  }
+  log("ERROR: No Chromium executable found.");
+  return null;
+}
 
 async function sendAlertEmail(price, threshold) {
   await transporter.sendMail({
@@ -78,22 +99,31 @@ async function autoScroll(page) {
 
 // Get price once
 async function checkPriceOnce() {
-  const browser = await puppeteer.launch({
-    headless: true,
-    executablePath: "/usr/bin/chromium",
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--single-process",
-      "--disable-software-rasterizer"
-    ]
-  });
+  const execPath = findChromium();
+  if (!execPath) return null;
+
+  let browser;
 
   try {
+    browser = await puppeteer.launch({
+      headless: true,
+      executablePath: execPath,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--single-process",
+        "--disable-software-rasterizer",
+        "--disable-extensions"
+      ]
+    });
+
     const page = await browser.newPage();
-    await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await page.goto(URL, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000
+    });
 
     await new Promise(res => setTimeout(res, 3000));
     await autoScroll(page);
@@ -119,7 +149,7 @@ async function checkPriceOnce() {
     return null;
 
   } finally {
-    try { await browser.close(); } catch {}
+    try { if (browser) await browser.close(); } catch {}
   }
 }
 
@@ -167,7 +197,7 @@ async function runWatcherLoop() {
   }
 }
 
-// Express server for Render free plan
+// Express keep-alive
 const app = express();
 app.get("/", (req, res) => res.send("OK"));
 
