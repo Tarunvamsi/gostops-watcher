@@ -1,166 +1,242 @@
-const express = require("express");
-const puppeteer = require("puppeteer-core");
-const chromium = require("@sparticuz/chromium");
+const puppeteer = require("puppeteer");
 const nodemailer = require("nodemailer");
 
-// ENV
-const URL = process.env.URL;
-const GMAIL_USER = process.env.GMAIL_USER;
-const GMAIL_PASS = process.env.GMAIL_APP_PASS;
-const EMAIL_TO_1 = process.env.EMAIL_TO_1;
-const EMAIL_TO_2 = process.env.EMAIL_TO_2;
-const CHECK_INTERVAL = process.env.CHECK_INTERVAL
-  ? Number(process.env.CHECK_INTERVAL)
-  : 600000;
+const URL = "https://gostops.com/stay/Srinagar/srinagar-hostel?checkin=2026-01-16&checkout=2026-01-17";
 
-// thresholds chain
-const thresholds = [3000, 2500, 2000, 1500, 1000];
+// Stepped thresholds
+const thresholds = [2500, 2000, 1500, 1000];
 let currentIndex = 0;
-let lastNotifiedPrice = Infinity;
 
+const CHECK_INTERVAL = 10 * 60 * 1000; // 10 minutes
+
+// Timestamp helper
 function log(...msg) {
-  console.log(`[${new Date().toISOString()}]`, ...msg);
+  const now = new Date();
+
+  const timestamp = now.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+
+  console.log(`[${timestamp}]`, ...msg);
 }
 
-// Email transporter
+
+// Email setup (your variables)
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
-    user: GMAIL_USER,
-    pass: GMAIL_PASS
+    user: "tarunvamsipusarla@gmail.com",
+    pass: "uskguyltgjebtqeg"
   }
 });
 
 async function sendAlertEmail(price, threshold) {
-  await transporter.sendMail({
-    from: GMAIL_USER,
-    to: [EMAIL_TO_1, EMAIL_TO_2],
-    subject: `GoStops Price Alert! Price ₹${price} (Threshold ₹${threshold})`,
-    text: `📢 GoSTOPS Price Drop Alert!
+  const nextThreshold =
+    thresholds[currentIndex + 1] !== undefined
+      ? `₹${thresholds[currentIndex + 1]}`
+      : "No more thresholds — final one 🎉";
 
-Good news — the room price at goSTOPS Srinagar just dropped!
+  function buildMessage(name) {
+    return `Alert ${name},
 
-🔹 Current Price: ₹${price}
-🔹 Trigger Threshold: ₹${threshold}
-🔹 Checked At: ${new Date().toLocaleString()}
+Great news — the price at **goSTOPS Srinagar** just dropped!
 
-Book now:
+
+ 🏷️ Current Price: ₹${price.toLocaleString()}           
+ 🎯 Trigger Threshold: ₹${threshold.toLocaleString()}    
+ 🕒 Checked At: ${new Date().toLocaleString()}  
+
+Why this alert was triggered:
+✔ Price fell below your active threshold  
+✔ It is lower than any previously notified price  
+
+🔗 **Book your stay:**  
 ${URL}
 
-Next threshold to watch: ₹${thresholds[currentIndex + 1] ?? "No more"}
+📌 **What happens next?**
+Your watcher stays active.
 
-Your GoSTOPS Watcher 🤖`
+👉 **Next threshold:** ${nextThreshold}
+
+You’ll get another alert only if the price drops further.
+
+Happy deal hunting,  
+**Your GoSTOPS Price Watcher 🤖**
+`;
+  }
+
+  const subject = `Gostops Price Drop — Now ₹${price} (Trigger: ₹${threshold})`;
+  const headers = {
+    "X-Priority": "1",
+    "X-MSMail-Priority": "High",
+    "Priority": "urgent",
+    "Importance": "High"
+  };
+
+  // Send to Tarun
+  await transporter.sendMail({
+    from: "tarunvamsipusarla@gmail.com",
+    to: "pusarlatarunvamsi@gmail.com",
+    subject,
+    text: buildMessage("Tarun"),
+    headers
   });
 
-  log(`Email sent for threshold ₹${threshold}`);
+  // Send to Sai
+  await transporter.sendMail({
+    from: "tarunvamsipusarla@gmail.com",
+    to: "psai7094@gmail.com",
+    subject,
+    text: buildMessage("Sai"),
+    headers
+  });
+
+  log(`Emails sent to Tarun & Sai for threshold ₹${threshold}`);
 }
 
-// Scroll helper
+
+
+async function checkPrice() {
+  log("Launching browser...");
+
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage"
+    ]
+  });
+
+  log("Browser launched. Opening page...");
+
+  const page = await browser.newPage();
+  await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+
+  log("Page loaded. Waiting for content...");
+  await new Promise(res => setTimeout(res, 3000));
+
+  await autoScroll(page);
+  log("Page fully scrolled. Extracting price...");
+
+  const text = await page.evaluate(() => document.body.innerText);
+
+  let match = text.match(/Starting from\s*₹\s*([0-9.,]+)/i);
+  if (!match) match = text.match(/₹\s*([0-9.,]+)/);
+
+  if (!match) {
+    log("⚠️ Unable to extract price. The site structure may have changed.");
+    await browser.close();
+    return null;
+  }
+
+  const price = parseFloat(match[1].replace(/,/g, ""));
+  log(`📌 Price found: ₹${price}`);
+
+  await browser.close();
+  return price;
+}
+
+
 async function autoScroll(page) {
   await page.evaluate(async () => {
     await new Promise(resolve => {
       let totalHeight = 0;
-      const dist = 300;
+      const distance = 400;
       const timer = setInterval(() => {
-        window.scrollBy(0, dist);
-        totalHeight += dist;
+        window.scrollBy(0, distance);
+        totalHeight += distance;
         if (totalHeight >= document.body.scrollHeight) {
           clearInterval(timer);
           resolve();
         }
-      }, 120);
+      }, 200);
     });
   });
 }
 
-// MAIN PRICE SCRAPER
-async function checkPriceOnce() {
-  let browser;
+// TRACK last notified price to prevent spam
+let lastNotifiedPrice = Infinity;
 
-  try {
-    const execPath = await chromium.executablePath();
-
-    log("Launching Chromium from:", execPath);
-
-    browser = await puppeteer.launch({
-      executablePath: execPath,
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      headless: chromium.headless
-    });
-
-    const page = await browser.newPage();
-    await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 60000 });
-
-    await new Promise(res => setTimeout(res, 2000));
-    await autoScroll(page);
-
-    const text = await page.evaluate(() => document.body.innerText);
-
-    // 1) Try exact "Starting from" pattern
-    let match = text.match(/Starting from[^₹]*₹\s*([0-9.,]+)/i);
-
-    if (match) {
-      const p = parseFloat(match[1].replace(/,/g, ""));
-      log("Parsed price (starting from):", p);
-      return p;
-    }
-
-    // 2) Fallback: capture ALL ₹ amounts and pick the lowest
-    const allMatches = [...text.matchAll(/₹\s*([0-9.,]+)/g)]
-      .map(m => parseFloat(m[1].replace(/,/g, "")))
-      .filter(n => !isNaN(n) && n > 100 && n < 20000); // remove garbage numbers
-
-    if (allMatches.length > 0) {
-      const lowest = Math.min(...allMatches);
-      log("Parsed price (fallback lowest):", lowest);
-      return lowest;
-    }
-
-    log("Price not found.");
-    return null;
-
-  } catch (err) {
-    log("Scraping error:", err.message);
-    return null;
-
-  } finally {
-    try { if (browser) await browser.close(); } catch {}
-  }
-}
-
-// Watch loop
-async function runWatcherLoop() {
-  log("Watcher started → thresholds:", thresholds.join(" → "));
+// MAIN WATCHER LOOP
+// MAIN WATCHER LOOP
+(async function runWatcher() {
+  log("Watcher started...");
+  log("Threshold path:", thresholds.join(" → "));
 
   while (currentIndex < thresholds.length) {
-    const threshold = thresholds[currentIndex];
+    const currentThreshold = thresholds[currentIndex];
 
-    log(`Checking… current threshold ₹${threshold}, last notified: ${
-      lastNotifiedPrice === Infinity ? "none" : lastNotifiedPrice
-    }`);
+    log("--------------------------------------------------------------");
+    log(`🕒 Checking price at: ${new Date().toLocaleString()}`);
+    log(`🎯 Current threshold: ₹${currentThreshold}`);
+    log(`📉 Last notified price: ${lastNotifiedPrice === Infinity ? "none yet" : "₹" + lastNotifiedPrice}`);
+    log("--------------------------------------------------------------");
 
-    const price = await checkPriceOnce();
+    let price = null;
+    let retryCount = 0;
 
-    if (price !== null && price <= threshold && price < lastNotifiedPrice) {
-      await sendAlertEmail(price, threshold);
-      lastNotifiedPrice = price;
-      currentIndex++;
+    // ------------------------------
+    // RETRY LOGIC (max 3 times)
+    // ------------------------------
+    while (retryCount < 3) {
+      price = await checkPrice();
+
+      if (price !== null) break;
+
+      retryCount++;
+      log(`⚠️ Retry ${retryCount}/3 in 1 minute... (couldn't extract price)`);
+
+      await new Promise(res => setTimeout(res, 60 * 1000)); // 1 MINUTE
     }
 
-    log(`Sleeping ${CHECK_INTERVAL / 60000} minutes...\n`);
-    await new Promise(r => setTimeout(r, CHECK_INTERVAL));
+    // If still null after retries → skip whole cycle
+    if (price === null) {
+      log("❌ Failed to extract price after 3 retries. Sleeping 10 minutes...");
+      log("--------------------------------------------------------------\n");
+      await new Promise(res => setTimeout(res, CHECK_INTERVAL));
+      continue;
+    }
+
+    // ------------------------------
+    // PRICE CHECKING LOGIC (same)
+    // ------------------------------
+    log(`💰 Current price: ₹${price}`);
+
+    if (price <= currentThreshold && price < lastNotifiedPrice) {
+      log("🎉 Price dropped! Sending alert email...");
+
+      await sendAlertEmail(price, currentThreshold);
+
+      lastNotifiedPrice = price;
+      currentIndex++;
+
+      if (currentIndex >= thresholds.length) {
+        log("🚀 All thresholds completed. Stopping watcher.");
+        process.exit(0);
+      }
+
+      log(`Next threshold → ₹${thresholds[currentIndex]}`);
+
+    } else if (price <= currentThreshold && price >= lastNotifiedPrice) {
+      log(`ℹ️ Price ₹${price} is below threshold but NOT lower than last notified (₹${lastNotifiedPrice}).`);
+
+    } else {
+      log(`❌ No price drop. Current price ₹${price} is above threshold ₹${currentThreshold}.`);
+    }
+
+    log(`😴 No alert this round. Sleeping for ${CHECK_INTERVAL / 60000} minutes...`);
+    log("--------------------------------------------------------------\n");
+
+    await new Promise(res => setTimeout(res, CHECK_INTERVAL));
   }
 
-  log("All thresholds completed.");
-}
+  log("Final threshold reached. Exiting.");
+  process.exit(0);
+})();
 
-// Express keep-alive (Render required)
-const app = express();
-app.get("/", (req, res) => res.send("OK"));
-
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  log(`Server running on ${port}`);
-  runWatcherLoop();
-});
